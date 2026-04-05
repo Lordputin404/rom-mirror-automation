@@ -1,0 +1,128 @@
+name: ROM Mirror (Multi-Host to SourceForge)
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: "Google Drive / Direct download link"
+        required: true
+
+      sf_folder:
+        description: "Target SourceForge folder (e.g. Lunaris-AOSP)"
+        required: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y python3-pip sshpass wget curl
+          pip3 install gdown
+
+      - name: Start Notification (Telegram)
+        run: |
+          MESSAGE="🚀 ROM Mirror Started
+
+          📁 Folder: ${{ github.event.inputs.sf_folder }}
+          🔗 Source: ${{ github.event.inputs.file_url }}
+
+          ⏳ Processing..."
+
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
+          -d chat_id=${{ secrets.TG_CHAT_ID }} \
+          -d text="$MESSAGE"
+
+      - name: Download file (Multi-host support)
+        run: |
+          echo "🔽 Starting download..."
+
+          RAW_URL="${{ github.event.inputs.file_url }}"
+          echo "Input URL: $RAW_URL"
+
+          if echo "$RAW_URL" | grep -q "drive.google.com"; then
+            echo "📦 Google Drive detected"
+
+            FILE_ID=$(echo "$RAW_URL" | sed -E 's#.*/d/([^/]+).*#\1#')
+
+            if [ "$FILE_ID" = "$RAW_URL" ]; then
+              FILE_ID=$(echo "$RAW_URL" | sed -E 's/.*id=([^&]+).*/\1/')
+            fi
+
+            if [ -z "$FILE_ID" ]; then
+              echo "❌ Failed to extract File ID"
+              exit 1
+            fi
+
+            gdown "https://drive.google.com/uc?id=$FILE_ID&confirm=t" --fuzzy
+
+          else
+            echo "🌐 Direct link detected"
+            wget -c --content-disposition "$RAW_URL"
+          fi
+
+          echo "📂 Files downloaded:"
+          ls -lh
+
+          FILE_NAME=$(ls -t | head -n 1)
+
+          if [ -z "$FILE_NAME" ]; then
+            echo "❌ No file found"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s "$FILE_NAME")
+          echo "📏 Size: $FILE_SIZE bytes"
+
+          if [ "$FILE_SIZE" -lt 104857600 ]; then
+            echo "❌ File too small (download failed)"
+            exit 1
+          fi
+
+          echo "FILE_NAME=$FILE_NAME" >> $GITHUB_ENV
+          echo "✅ File ready: $FILE_NAME"
+
+      - name: Upload to SourceForge
+        run: |
+          echo "🚀 Uploading..."
+
+          sshpass -p "${{ secrets.SF_PASSWORD }}" sftp -o StrictHostKeyChecking=no \
+          ${{ secrets.SF_USER }}@frs.sourceforge.net <<EOF
+          mkdir -p /home/frs/project/${{ secrets.SF_PROJECT }}/${{ github.event.inputs.sf_folder }}
+          cd /home/frs/project/${{ secrets.SF_PROJECT }}/${{ github.event.inputs.sf_folder }}
+          put "${{ env.FILE_NAME }}"
+          bye
+          EOF
+
+      - name: Success Notification (Telegram)
+        if: success()
+        run: |
+          MESSAGE="✅ Mirror Completed Successfully 🎉
+
+          📦 File: ${{ env.FILE_NAME }}
+          📁 Folder: ${{ github.event.inputs.sf_folder }}
+
+          🔗 Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
+          -d chat_id=${{ secrets.TG_CHAT_ID }} \
+          -d text="$MESSAGE"
+
+      - name: Failure Notification (Telegram)
+        if: failure()
+        run: |
+          MESSAGE="❌ Mirror Failed!
+
+          📁 Folder: ${{ github.event.inputs.sf_folder }}
+
+          🔗 Check Logs:
+          https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
+          -d chat_id=${{ secrets.TG_CHAT_ID }} \
+          -d text="$MESSAGE"
+
+      - name: Done
+        run: echo "🎯 Workflow finished"
