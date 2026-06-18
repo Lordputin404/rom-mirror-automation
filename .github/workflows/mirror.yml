@@ -90,7 +90,6 @@ jobs:
 
           sshpass -p "${{ secrets.SF_PASSWORD }}" sftp -o StrictHostKeyChecking=no \
           ${{ secrets.SF_USER }}@frs.sourceforge.net <<EOF
-          mkdir -p /home/frs/project/${{ secrets.SF_PROJECT }}/${{ github.event.inputs.sf_folder }}
           cd /home/frs/project/${{ secrets.SF_PROJECT }}/${{ github.event.inputs.sf_folder }}
           put "${{ env.FILE_NAME }}"
           bye
